@@ -24,7 +24,7 @@
 
 **Fortune Liuyao** is a self-contained Agent Skill for deterministic Wenwang Najia / Six Lines divination (`六爻`, `文王纳甲`, `京房八宫`). It calculates the original and changed hexagrams, Najia, Six Relations, Six Spirits, Shi/Ying positions, void and broken branches, moving-line transformations, hidden spirits, and auditable rule facts before an AI Agent writes the interpretation.
 
-It works with skill-compatible desktop Agents such as OpenAI Codex, Claude Code, Cursor, WorkBuddy, and other Agent Skills hosts. One local Python command returns the chart data, interpretation prompt, and standalone HTML chart; the current Agent must provide the complete written interpretation directly in chat. Markdown remains internal for review and fact auditing. No Fortune API, API key, web service, npm package, or external Python package installation is required.
+It works with skill-compatible desktop Agents such as OpenAI Codex, Claude Code, Cursor, WorkBuddy, and other Agent Skills hosts. One local Python command returns the chart data and interpretation prompt; after the current Agent writes and audits the complete interpretation, the Skill merges the same report into a standalone HTML file containing both chart and interpretation. The complete report also remains directly available in chat. Markdown stays internal. No Fortune API, API key, web service, npm package, or external Python package installation is required.
 
 Search aliases: **Liuyao Skill**, **Six Lines Divination Skill**, **Wenwang Najia Skill**, **I Ching Agent Skill**, **六爻排盘 Skill**, **三枚硬币起卦**, **京房八宫排盘**.
 
@@ -129,6 +129,8 @@ python -S scripts/run_liuyao.py --selfcheck
 
 准备三枚相同硬币，连续摇六次。**第一次是初爻，最后一次是上爻。**
 
+系统不会通过硬币图片判断正反面。本 Skill 默认把有面额数字／文字的一面记为“正”，把国徽、花卉等图案面记为“反”，并在六次中保持一致；选择硬币模式后，Agent 也会主动显示下面的计数方法。
+
 本 Skill 采用正面记 3、反面记 2：
 
 | 三枚硬币 | 爻值 | 爻象 |
@@ -190,7 +192,7 @@ Skill 会先回显为 `[7, 8, 6, 7, 9, 8]`，确认顺序后再排盘，避免�
 Skill 默认由当前电脑 Agent 在对话中完成排盘与解读；起卦方式的交互取决于宿主能力：
 
 - 宿主支持选择控件时，显示自动、逐爻、硬币／爻值三个选项；不支持时降级为简短文字选项；
-- 支持 HTML 文件产物时，生成可独立打开的可视卦盘；
+- 支持 HTML 文件产物时，事实审计通过后生成包含卦盘与完整解读的独立报告；
 - 无论是否能交付 HTML，都在聊天中直接输出完整文字解读；Markdown 只用于内部复核和事实审计；
 - 两种格式都保留本卦、变卦、世应、动爻、空破、伏神、变爻关系和初爻至上爻的输入顺序；
 - 解读失败时，已经完成的排盘仍然可以单独查看和保存。

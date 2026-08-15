@@ -24,17 +24,17 @@ python scripts/run_liuyao.py --selfcheck
 
 ## 唯一生成入口
 
-默认只调用 `scripts/run_liuyao.py`。它负责敏感分流、起卦输入、历法、排盘、规则事实、解读上下文，以及 HTML/Markdown 同步输出。
+排盘阶段只调用 `scripts/run_liuyao.py`。它负责敏感分流、起卦输入、历法、排盘、规则事实、解读上下文，以及临时卦盘 HTML/Markdown 同步输出。
 
 成功输出使用 `fortune-liuyao-run.v2` 契约：
 
 - `ok` / `blocked`：运行状态；
 - `result`：确定性结果；
 - `prompt`：当前 Agent 的完整解读上下文；
-- `artifacts.html` / `artifacts.markdown`：同源卦盘文件的绝对路径；HTML 可作为用户附件，Markdown 仅供内部复核；
+- `artifacts.html` / `artifacts.markdown`：同源临时卦盘文件的绝对路径；二者暂不作为最终用户报告；
 - `schemaVersion`：契约版本。
 
-统一 JSON 是脚本、Agent、渲染器和事实审计之间的内部数据合同，用于避免重复计算和字段错位。默认不向最终用户展示原始 JSON、`prompt` 或 Markdown；用户在当前对话中直接接收完整报告，HTML 仅作为可选卦盘附件，除非明确要求导出机器可读数据。
+统一 JSON 是脚本、Agent、渲染器和事实审计之间的内部数据合同，用于避免重复计算和字段错位。默认不向最终用户展示原始 JSON、`prompt` 或 Markdown；用户在当前对话中直接接收完整报告，最终 HTML 作为包含卦盘与同一份解读的可选附件。
 
 `build_chart.py`、`build_model_packet.py`、`render_chart.py` 和 `render_chart_text.py` 是内部组件与诊断入口，不用于默认编排。
 
@@ -43,17 +43,17 @@ python scripts/run_liuyao.py --selfcheck
 模型完成报告后运行：
 
 ```powershell
-python scripts/verify_facts.py --chart session.json --report report.md --output fact-audit.json
+python scripts/render_final_report.py --session session.json --report report.md --output fortune-liuyao-report.html --audit-output fact-audit.json
 ```
 
-退出码 `0` 表示未发现明确盘面冲突，退出码 `2` 表示报告中的确定性字段需要修正。吉凶、应期、传统取象和作用链主次不属于程序裁决范围。
+退出码 `0` 表示未发现明确盘面冲突并已生成完整 HTML，退出码 `2` 表示报告中的确定性字段需要修正且不会生成最终 HTML。吉凶、应期、传统取象和作用链主次不属于程序裁决范围。
 
 ## 错误处理
 
 - 输入无效：指出缺少或冲突字段，修正后重新运行。
 - Python 或依赖缺失：说明缺少的运行条件，不生成半张盘。
 - 历法失败：停止排盘和解读。
-- HTML 交付失败：只省略可视化卦盘附件；聊天中的完整文字解读照常输出，不向用户交付 Markdown。
+- 最终 HTML 生成或交付失败：只省略附件；聊天中的完整文字解读照常输出，不向用户交付 Markdown。
 - 解读失败：保留并交付已经生成的确定性卦盘。
 
 ## 版本审计

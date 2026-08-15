@@ -1,11 +1,14 @@
 """Small golden regression set for the standalone Skill runtime."""
 
+from pathlib import Path
+
 from cast_lines import _automatic_cast, _manual_cast
 from cast_one_line import cast_one
-from build_model_packet import ROUTING_POLICY, SYSTEM_PROMPT, _load_method
+from build_model_packet import FOLLOW_UP_POLICY, ROUTING_POLICY, SYSTEM_PROMPT, _load_method
 from classify_sensitive import classify
 from liuyao_core import build_chart
 from render_chart_text import render
+from render_final_report import build_final_report
 from run_liuyao import run
 from verify_facts import verify_report
 
@@ -16,6 +19,16 @@ def check(condition: bool, message: str) -> None:
 
 
 def main() -> None:
+    project_root = Path(__file__).resolve().parent.parent
+    skill_text = (project_root / "SKILL.md").read_text(encoding="utf-8")
+    coin_guide = (project_root / "references" / "manual-coin-casting.md").read_text(encoding="utf-8")
+    follow_up_guide = (project_root / "references" / "follow-up-dialogue.md").read_text(encoding="utf-8")
+    check("系统不会根据硬币图案自动判断正反" in skill_text, "manual coin mode lacks proactive side guidance")
+    check("面额数字／文字的一面记为“正”" in skill_text and "国徽、花卉等图案面记为“反”" in skill_text, "default physical coin sides mismatch")
+    check("请按顺序反馈六次结果" in skill_text and "正=字／面额面，反=国徽／花卉面" in skill_text, "manual coin response format missing")
+    check("正面记 3，反面记 2" in skill_text and "第一次是初爻" in skill_text, "manual coin counting prompt mismatch")
+    check("Agent 必须主动展示" in coin_guide, "manual coin guidance is not mandatory")
+    check("不重新起卦" in follow_up_guide and "不事后改写原始结论" in follow_up_guide, "follow-up lock guide mismatch")
     tun = build_chart(
         [7, 8, 8, 6, 7, 8],
         day_ganzhi="庚戌", month_branch="未",
@@ -59,6 +72,9 @@ def main() -> None:
     check(_load_method("career")["methodId"] == "liuyao-career-v4", "career method version mismatch")
     check("先审题取用并处理用神多现" in SYSTEM_PROMPT, "interpretation order prompt mismatch")
     check("不可等权计票" in SYSTEM_PROMPT, "evidence priority prompt mismatch")
+    check("总结与行动" in SYSTEM_PROMPT and "诚实但不泄气" in SYSTEM_PROMPT, "closing action summary prompt mismatch")
+    check("不因当前日期变化重算原盘" in FOLLOW_UP_POLICY, "follow-up calendar lock missing")
+    check("不自动重做 HTML 或分享图" in FOLLOW_UP_POLICY, "follow-up delivery lock missing")
     check(classify("未来三个月求职是否顺利").allowed, "ordinary question was blocked")
     check(not classify("怀孕后孩子会不会健康").allowed, "sensitive pregnancy question was not blocked")
     check(classify("孩子在学校健康快乐吗").allowed, "ordinary child wellbeing question was over-blocked")
@@ -85,7 +101,26 @@ def main() -> None:
     check(unspecified_relationship["result"]["analysis"]["yongshenRelative"] is None, "unspecified relationship perspective was forced into a gender route")
     single = cast_one(1)
     check(single["positionName"] == "初爻" and single["value"] in (6, 7, 8, 9), "single-line casting mismatch")
-    print("standalone fortune-liuyao regression: 27/27 passed")
+    report = """## 直接判断
+
+这件事有推进空间，但需要先处理当前阻力。
+
+## 盘面依据
+
+- 本卦为水雷屯，变卦为泽雷随。
+- 世爻在二爻，应爻在五爻。
+
+## 现实建议
+
+先验证需求，再决定投入节奏。
+"""
+    final_html, final_audit = build_final_report(one_shot, report)
+    check(final_audit["accepted"], "valid final report failed audit")
+    check("综合解读" in final_html and "这件事有推进空间" in final_html, "interpretation missing from final HTML")
+    check("水雷屯" in final_html and "泽雷随" in final_html, "chart missing from final HTML")
+    rejected_html, rejected_audit = build_final_report(one_shot, "本卦为乾为天。")
+    check(not rejected_audit["accepted"] and not rejected_html, "invalid report produced final HTML")
+    print("standalone fortune-liuyao regression: 39/39 passed")
 
 
 if __name__ == "__main__":

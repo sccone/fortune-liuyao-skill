@@ -158,6 +158,8 @@ def selfcheck() -> dict[str, object]:
     record("deterministic_core", check_golden_chart)
 
     def check_renderers() -> None:
+        from render_final_report import build_final_report
+
         with tempfile.TemporaryDirectory() as temp_dir:
             value = run(
                 "未来三个月能否找到合适工作",
@@ -171,6 +173,10 @@ def selfcheck() -> dict[str, object]:
             artifacts = value["artifacts"]
             if not all(Path(path).is_file() for path in artifacts.values()):
                 raise RuntimeError("HTML/Markdown artifacts were not created")
+            report = "本卦为水雷屯，变卦为泽雷随。世爻在二爻，应爻在五爻。此事可结合现实条件继续观察。"
+            final_html, audit = build_final_report(value, report)
+            if not audit["accepted"] or "综合解读" not in final_html or report not in final_html:
+                raise RuntimeError("complete HTML report was not created")
 
     record("renderers", check_renderers)
     ready = all(bool(item["ok"]) for item in checks)
