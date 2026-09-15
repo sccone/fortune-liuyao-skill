@@ -29,6 +29,16 @@ DELIVERY_POLICY = """排盘展示不是最终回答。当前聊天回复才是�
 FOLLOW_UP_POLICY = """若用户在当前对话继续追问同一事项，沿用本次 payload 锁定的原始占问、起卦时间、月日、爻值、chart、deterministicRuleFacts、用神主线和首次判断，不重新起卦，不因当前日期变化重算原盘，也不为了迎合用户改写首次结论。原因、应期和术语追问直接补充；主动、等待或换方案属于原事项下的策略分析，不得写成新盘面事实；现实进展未改变事项、对象、目标和时间范围时继续沿用原盘，发生实质变化时才说明需要新占问；反馈结果时按原条件复盘，不事后改写结论。后续回答直接回应新问题，给最相关原盘依据和一个现实行动，不机械重复整篇报告，不自动重做 HTML 或分享图。"""
 
 
+OPTION_POLICY = """本次占问是同一事项下的互斥选项对比，不是多个独立事项。routingGuidance.optionMapping.bindings 在起卦前声明并已冻结：哪个 optionId 对应哪一爻不可改写、不可调换，也不得在解读时另取更顺手的爻位；复述映射时必须与 bindings 完全一致，写错映射会被事实审计拦截。
+mappingMode 为 yongshen_multi 时用神多现取舍已挂起（selectionStatus 为 suspended_for_option_comparison）：被绑定的每次出现按等位用神各读各的选项，不要先选出一个“主用神”再据此宣布对应选项胜出——用神旺相只说明它是用神，不说明该选项当选。
+mappingMode 为 shi_ying 时用神消歧照常进行，对比由世应承担：世为现状方，应为另一方。
+optionArguments 给出每个选项的旺衰状态、限制状态、应期候选和与世爻的关系，是对比材料而非结论，其 conclusionScope 已标明 option_comparison_only_not_outcome。unmappedCandidates 列出未绑定的同六亲爻位，只作现实语境，不得临时升级为某个选项。
+optionMapping.boundRelatives 列出每个选项所绑爻位的六亲。六亲由卦宫五行与该爻纳甲五行算出，是爻的属性，与选项本身是什么无关；`shi_ying` 绑的是世应两个位置，位置上坐着什么六亲取决于起卦结果。因此两个选项落在不同六亲上是常态，不说明它们性质不同。
+strengthComparable 为 false 时，两个选项的 strengthStatus、supportingSignals 分属不同六亲，**不是同类比，禁止直接比大小得出结论**；此时可比的量是 carriesYongshen 与 yongshenLinks——用神是否持于该方、以及用神对该方是生是克。strengthComparable 为 true 时才可以直接比较两侧旺衰。
+yongshenLinks 为空表示规则层没有给出用神（如 general 领域）。此时先按传统方法自行确定用神并说明依据，再判断它偏向哪一方，不得改用“哪一爻旺就选哪个”。
+你仍须给出明确倾向并说明决定性作用链，同时覆盖会实质改变取舍的结构；选项各有利弊时说明各自成立的条件与代价，不要用“都可以”回避。输出时在直接判断处先点明倾向哪个选项，再逐个说明该选项的用神依据、月日条件和主要阻力。"""
+
+
 METHOD_IDS = {
     "career": "liuyao-career-v4",
     "wealth": "liuyao-wealth-v1",
@@ -70,6 +80,8 @@ ROUTING_GUIDANCE_FIELDS = (
     "selectionCompleteness",
     "candidates",
     "candidateArguments",
+    "optionMapping",
+    "optionArguments",
     "ruleDecisions",
     "timingCandidates",
     "timingAnalysis",
@@ -133,6 +145,10 @@ def build_packet(chart_response: dict[str, Any]) -> dict[str, Any]:
         },
         "analysisMethod": _load_method(category),
     }
+    # Only option-comparison charts carry the option policy; ordinary questions keep the shorter prompt.
+    system_prompt = f"{SYSTEM_PROMPT}\n{ROUTING_POLICY}\n{DELIVERY_POLICY}\n{FOLLOW_UP_POLICY}"
+    if analysis.get("optionMapping"):
+        system_prompt = f"{system_prompt}\n{OPTION_POLICY}"
     return {
         "schemaVersion": "fortune-liuyao-interpretation-packet.v1",
         "pipeline": [
@@ -148,7 +164,7 @@ def build_packet(chart_response: dict[str, Any]) -> dict[str, Any]:
             "schoolProfile": chart.get("schoolProfile"),
         },
         "messages": [
-            {"role": "system", "content": f"{SYSTEM_PROMPT}\n{ROUTING_POLICY}\n{DELIVERY_POLICY}\n{FOLLOW_UP_POLICY}"},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
     }

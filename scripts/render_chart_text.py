@@ -68,6 +68,23 @@ def render(data: dict[str, object]) -> str:
             )
     candidates = analysis.get("candidates") or []
     candidate_text = "；".join(f"{'伏神' if row.get('hidden') else '第'+str(row.get('position'))+'爻'} {row.get('sixRelative')}{row.get('najiaBranch')}" for row in candidates) or "待结合问题确认"
+    mapping = analysis.get("optionMapping")
+    if isinstance(mapping, dict):
+        labels = {
+            str(option.get("optionId")): str(option.get("label", ""))
+            for option in (analysis.get("questionContext") or {}).get("options", [])
+        }
+        modes = {"shi_ying": "世应取用", "yongshen_multi": "用神两现取用"}
+        rows.extend(["", f"**选项对比：** {modes.get(mapping.get('mappingMode'), mapping.get('mappingMode'))}"])
+        relatives = mapping.get("boundRelatives") or {}
+        for binding in mapping.get("bindings", []):
+            kind, _, position = str(binding.get("ref", "")).partition(":")
+            where = f"第{position}爻伏神" if kind == "hidden" else f"第{position}爻"
+            option_id = str(binding.get("optionId"))
+            relative = relatives.get(option_id, "")
+            rows.append(f"- {option_id} {labels.get(option_id, '')} → {where} {relative}".rstrip())
+        if mapping.get("strengthComparable") is False:
+            rows.append("- 各选项六亲不同，旺衰非同类比；以用神偏向为准。")
     rows.extend(["", f"**用神主线：** {analysis.get('yongshenRelative') or '待确认'}", f"**用神候选：** {candidate_text}", "", "> 本内容基于玄学体系生成，仅供文化爱好与思维参考，不构成任何重大人生决策的专业建议。"])
     return "\n".join(rows) + "\n"
 

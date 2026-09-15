@@ -89,6 +89,9 @@ DOMAIN_YONGSHEN = {
     "travel": "世爻", "home": "父母", "legal_risk": "官鬼",
 }
 
+QUESTION_FORMS = ("single_target", "option_comparison")
+MAPPING_MODES = ("shi_ying", "yongshen_multi")
+
 
 def validate_lines(values: Iterable[int]) -> list[int]:
     lines = [int(value) for value in values]
@@ -271,6 +274,176 @@ def _timing_candidates(candidate: dict[str, Any], month_branch: str) -> list[dic
     return list(dedup.values())
 
 
+def _normalize_options(options: Any) -> list[dict[str, Any]]:
+    """Validate declared options; refuse anything a later fact audit could not check."""
+    if not isinstance(options, (list, tuple)) or len(options) < 2:
+        raise ValueError("option_comparison requires at least two options")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for option in options:
+        if not isinstance(option, dict):
+            raise ValueError("each option must be an object")
+        option_id = str(option.get("optionId") or "").strip()
+        label = str(option.get("label") or "").strip()
+        if not option_id or not label:
+            raise ValueError("each option requires optionId and label")
+        if option_id in seen:
+            raise ValueError(f"duplicate optionId: {option_id}")
+        seen.add(option_id)
+        normalized.append({"optionId": option_id, "label": label, "isStatusQuo": bool(option.get("isStatusQuo"))})
+    return normalized
+
+
+def _resolve_ref(ref: Any, lines: list[dict[str, Any]], hidden_lines: list[dict[str, Any]]) -> dict[str, Any]:
+    kind, _, raw = str(ref).partition(":")
+    if kind not in ("line", "hidden") or not raw.isdigit():
+        raise ValueError(f"binding ref must look like line:N or hidden:N; got {ref!r}")
+    position = int(raw)
+    for item in lines if kind == "line" else hidden_lines:
+        if item["position"] == position:
+            return {**item, "hidden": kind == "hidden"}
+    raise ValueError(f"binding ref does not exist in this chart: {ref}")
+
+
+def _yongshen_links(
+    line: dict[str, Any], candidates: list[dict[str, Any]], hidden: bool
+) -> list[dict[str, Any]]:
+    """Relation from each yongshen appearance to this line.
+
+    Two options may sit on different 六亲, which makes their own strength values
+    incomparable. How the yongshen acts on each side is the comparable quantity.
+    """
+    links: list[dict[str, Any]] = []
+    for candidate in candidates:
+        candidate_hidden = bool(candidate.get("hidden"))
+        if candidate["position"] == line["position"] and candidate_hidden == hidden:
+            continue
+        links.append({
+            "ref": f"{'hidden' if candidate_hidden else 'line'}:{candidate['position']}",
+            "relationFromYongshen": _element_relation(candidate["najiaElement"], line["najiaElement"]),
+        })
+    return links
+
+
+def _option_argument(
+    option_id: str, ref: str, line: dict[str, Any], shi_line: dict[str, Any],
+    candidates: list[dict[str, Any]], yongshen: str | None,
+) -> dict[str, Any]:
+    """Mirror candidateArguments so option comparison reuses one evidence shape."""
+    signals = (line.get("strengthEvidence") or {}).get("signals", [])
+    limitations = [
+        name for name, flag in (
+            ("hidden", line.get("hidden")), ("void", line.get("isVoid")),
+            ("month_break", line.get("isMonthBreak")), ("day_clash", line.get("isDayClash")),
+        ) if flag
+    ]
+    return {
+        "optionId": option_id, "ref": ref, "position": line["position"],
+        "hidden": bool(line.get("hidden")), "moving": bool(line.get("moving")),
+        "sixRelative": line.get("sixRelative"),
+        "strengthStatus": (line.get("strengthEvidence") or {}).get("status", "not_computed_for_hidden"),
+        "supportingSignals": [item for item in signals if item.get("direction") == "support"],
+        "limitingStates": limitations,
+        "timingCandidates": line.get("timingCandidates", []),
+        "relationToShi": _branch_relations(line["najiaBranch"], shi_line["najiaBranch"]),
+        "yongshenRelative": yongshen,
+        "carriesYongshen": bool(
+            yongshen and (line.get("isShi") if yongshen == "世爻" else line.get("sixRelative") == yongshen)
+        ),
+        "yongshenLinks": _yongshen_links(line, candidates, ref.startswith("hidden:")),
+        "conclusionScope": "option_comparison_only_not_outcome",
+    }
+
+
+def _build_option_mapping(
+    *,
+    options: list[dict[str, Any]],
+    mapping_mode: str | None,
+    bindings: Any,
+    lines: list[dict[str, Any]],
+    hidden_lines: list[dict[str, Any]],
+    shi_position: int,
+    ying_position: int,
+    candidates: list[dict[str, Any]],
+    question_category: str,
+    month_branch: str,
+    yongshen: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Bind declared options to chart positions. Refuse to guess: a wrong binding is unfalsifiable."""
+    if mapping_mode not in MAPPING_MODES:
+        raise ValueError(f"mappingMode must be one of {MAPPING_MODES}; got {mapping_mode!r}")
+    if mapping_mode == "shi_ying":
+        if len(options) != 2:
+            raise ValueError("shi_ying mapping supports exactly two options")
+        if bindings:
+            raise ValueError("shi_ying mapping derives bindings from 世/应 and rejects manual bindings")
+        if DOMAIN_YONGSHEN.get(question_category) == "世爻":
+            raise ValueError(f"shi_ying mapping conflicts with the 世爻 yongshen of domain '{question_category}'")
+        status_quo = [option for option in options if option["isStatusQuo"]]
+        if len(status_quo) > 1:
+            raise ValueError("shi_ying mapping accepts at most one status-quo option")
+        # A status quo takes 世; with two fresh options, declaration order decides instead.
+        # Both are fixed before the cast, so the mapping stays frozen either way.
+        tie_break = "status_quo" if status_quo else "declaration_order"
+        first = status_quo[0] if status_quo else options[0]
+        other = next(option for option in options if option["optionId"] != first["optionId"])
+        resolved = [(first, f"line:{shi_position}", "shi"), (other, f"line:{ying_position}", "ying")]
+    else:
+        declared: dict[str, str] = {}
+        for binding in bindings or []:
+            if not isinstance(binding, dict):
+                raise ValueError("each binding must be an object")
+            option_id = str(binding.get("optionId") or "").strip()
+            ref = str(binding.get("ref") or "").strip()
+            if not option_id or not ref:
+                raise ValueError("each binding requires optionId and ref")
+            if option_id in declared:
+                raise ValueError(f"duplicate binding for option {option_id}")
+            declared[option_id] = ref
+        known = {option["optionId"] for option in options}
+        missing = sorted(known - set(declared))
+        if missing:
+            raise ValueError(f"yongshen_multi mapping requires a binding for every option; missing {missing}")
+        unknown = sorted(set(declared) - known)
+        if unknown:
+            raise ValueError(f"binding refers to undeclared optionId: {unknown}")
+        if len(set(declared.values())) != len(declared):
+            raise ValueError("two options cannot bind to the same chart position")
+        tie_break = "explicit_binding"
+        resolved = [(option, declared[option["optionId"]], "yongshen_appearance") for option in options]
+
+    shi_line = lines[shi_position - 1]
+    bound_refs: list[str] = []
+    option_arguments: list[dict[str, Any]] = []
+    for option, ref, basis in resolved:
+        line = _resolve_ref(ref, lines, hidden_lines)
+        line.setdefault("timingCandidates", _timing_candidates(line, month_branch))
+        bound_refs.append(ref)
+        option_arguments.append(_option_argument(option["optionId"], ref, line, shi_line, candidates, yongshen))
+    bound_relatives = {
+        argument["optionId"]: argument["sixRelative"] for argument in option_arguments
+    }
+    mapping = {
+        "mappingMode": mapping_mode,
+        "declaredBefore": "cast",
+        "tieBreak": tie_break,
+        "boundRelatives": bound_relatives,
+        # Strength is only comparable across options that sit on the same 六亲.
+        "strengthComparable": len(set(bound_relatives.values())) == 1,
+        "bindings": [
+            {"optionId": option["optionId"], "ref": ref, "basis": basis, "hidden": ref.startswith("hidden:")}
+            for option, ref, basis in resolved
+        ],
+        "unmappedCandidates": [
+            f"{'hidden' if candidate.get('hidden') else 'line'}:{candidate['position']}"
+            for candidate in candidates
+            if f"{'hidden' if candidate.get('hidden') else 'line'}:{candidate['position']}" not in bound_refs
+        ],
+        "conclusionScope": "option_comparison_only_not_outcome",
+    }
+    return mapping, option_arguments
+
+
 def build_chart(
     lines_bottom_up: Iterable[int],
     *,
@@ -281,6 +454,10 @@ def build_chart(
     question_subtype: str | None = None,
     question_text: str | None = None,
     question_perspective: str | None = None,
+    question_form: str = "single_target",
+    options: Any = None,
+    mapping_mode: str | None = None,
+    bindings: Any = None,
 ) -> dict[str, Any]:
     values = validate_lines(lines_bottom_up)
     if month_branch not in BRANCHES:
@@ -424,6 +601,23 @@ def build_chart(
             "conclusionScope": "candidate_comparison_only_not_outcome",
         })
 
+    if question_form not in QUESTION_FORMS:
+        raise ValueError(f"questionForm must be one of {QUESTION_FORMS}; got {question_form!r}")
+    option_mapping: dict[str, Any] | None = None
+    option_arguments: list[dict[str, Any]] = []
+    normalized_options: list[dict[str, Any]] = []
+    if question_form == "option_comparison":
+        normalized_options = _normalize_options(options)
+        option_mapping, option_arguments = _build_option_mapping(
+            options=normalized_options, mapping_mode=mapping_mode, bindings=bindings,
+            lines=lines, hidden_lines=hidden_lines,
+            shi_position=shi_position, ying_position=ying_position,
+            candidates=candidates, question_category=question_category, month_branch=month_branch,
+            yongshen=yongshen,
+        )
+    elif options or mapping_mode or bindings:
+        raise ValueError("options, mappingMode and bindings require questionForm 'option_comparison'")
+
     context_arguments = {
         "shi": {"position": shi_position, "line": lines[shi_position - 1]},
         "ying": {"position": ying_position, "line": lines[ying_position - 1]},
@@ -446,10 +640,21 @@ def build_chart(
     analysis = {
         "schemaVersion": "fortune-liuyao-rule-facts.v1",
         "questionCategory": question_category,
-        "questionContext": {"domain": question_category, "subtype": question_subtype, "question": question_text, "perspective": question_perspective},
+        "questionContext": {
+            "domain": question_category, "subtype": question_subtype,
+            "question": question_text, "perspective": question_perspective,
+            "questionForm": question_form,
+            **({"options": normalized_options} if normalized_options else {}),
+        },
         "schoolProfile": "wenwang_najia_v1",
         "yongshenRelative": yongshen,
-        "selectionStatus": "candidates_identified" if candidates else "route_requires_context",
+        # Under yongshen_multi every bound appearance is read as a co-equal yongshen,
+        # so the usual 用神多现 tie-break is suspended rather than silently reused.
+        "selectionStatus": (
+            "suspended_for_option_comparison"
+            if option_mapping and option_mapping["mappingMode"] == "yongshen_multi"
+            else "candidates_identified" if candidates else "route_requires_context"
+        ),
         "selectionCompleteness": "complete" if yongshen else "needs_clarification",
         "candidates": candidates,
         "shiPosition": shi_position, "yingPosition": ying_position,
@@ -458,6 +663,7 @@ def build_chart(
         "threeHarmonyFacts": harmony_facts,
         "punishmentFacts": punishment_facts,
         "candidateArguments": candidate_arguments,
+        **({"optionMapping": option_mapping, "optionArguments": option_arguments} if option_mapping else {}),
         "contextArguments": context_arguments,
         "ruleDecisions": [
             {"ruleId": "role-route", "assertion": f"question target relative: {yongshen}", "conclusionScope": "role_mapping_only"}
