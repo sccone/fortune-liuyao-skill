@@ -9,7 +9,10 @@ from build_model_packet import (
     FOLLOW_UP_POLICY, OPTION_POLICY, ROUTING_POLICY, SYSTEM_PROMPT, _load_method, build_packet,
 )
 from classify_sensitive import classify
+import random
+
 from liuyao_core import build_chart
+from narrate_facts import narrate
 from render_chart import render_html
 from render_chart_text import render
 from render_final_report import build_final_report
@@ -302,6 +305,49 @@ def main() -> None:
     check("shiYingBranchRelations" in context, "世应关系事实 lost in dedup")
     check(all(key in facts for key in ("branchRelationFacts", "threeHarmonyFacts", "punishmentFacts")), "relation facts lost in dedup")
     check("chart.lines" in facts.get("lineReference", ""), "payload does not say where the lines live")
+
+    # Rule narration: every sentence restates a computed fact, so it must be
+    # correct by construction rather than merely correct on the sample chart.
+    narration = narrate(tun)
+    check("本卦为水雷屯，变卦为泽雷随" in narration, "narration lost the hexagram names")
+    check("世爻在二爻" in narration and "应爻在五爻" in narration, "narration lost 世应")
+    check("三爻 官鬼庚辰土" in narration, "narration lost a yongshen appearance")
+    check("泄于月建未" in narration or "得月建未生" in narration or "受月建未克" in narration
+          or "与月建未比和" in narration or "克月建未" in narration, "narration lost the month standing")
+    check("四爻 父母戊申金 动" in narration, "narration lost the moving line")
+    check("三爻下伏 妻财戊午" in narration, "narration lost the hidden line")
+    check("不含吉凶判断" in narration, "narration does not disclaim judgement")
+    check("综合判断" in narration, "narration does not say what it leaves out")
+    check(verify_report(narration, tun)["accepted"], "narration failed the audit on the golden chart")
+
+    option_narration = narrate(compared_response)
+    check("取用格式：用神两现取用" in option_narration, "narration lost the mapping mode")
+    check("选项 A（留在现公司）对应三爻" in option_narration, "narration lost an option binding")
+    check("这才是可比的量" in option_narration, "narration does not point at the comparable quantity")
+    check(verify_report(option_narration, compared_response)["accepted"], "option narration failed the audit")
+
+    stems, branches = "甲乙丙丁戊己庚辛壬癸", "子丑寅卯辰巳午未申酉戌亥"
+    random.seed(11)
+    audited = 0
+    for index in range(120):
+        values = [random.choice([6, 7, 8, 9]) for _ in range(6)]
+        offset = random.randrange(60)
+        extra = {}
+        domain = random.choice(["general", "career", "wealth", "academic", "home", "legal_risk"])
+        if index % 3 == 0:
+            extra = {
+                "question_form": "option_comparison", "mapping_mode": "shi_ying",
+                "options": [{"optionId": "A", "label": "甲案"}, {"optionId": "B", "label": "乙案"}],
+            }
+        sample = build_chart(
+            values, day_ganzhi=stems[offset % 10] + branches[offset % 12],
+            month_branch=random.choice(branches), cast_at="2026-09-15T12:00:00+08:00",
+            question_category=domain, question_text="测试问题", **extra,
+        )
+        if not verify_report(narrate(sample), sample)["accepted"]:
+            raise AssertionError(f"narration misstated chart {index}")
+        audited += 1
+    check(audited == 120, "random narration sweep did not run")
 
     option_run = run(
         "留在现公司还是去 B 公司", "career", "lines", "Asia/Shanghai", "7,8,8,6,7,8", None,
