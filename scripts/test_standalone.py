@@ -6,7 +6,8 @@ from pathlib import Path
 from cast_lines import _automatic_cast, _manual_cast
 from cast_one_line import cast_one
 from build_model_packet import (
-    FOLLOW_UP_POLICY, OPTION_POLICY, ROUTING_POLICY, SYSTEM_PROMPT, _load_method, build_packet,
+    DELIVERY_POLICY, FOLLOW_UP_POLICY, OPTION_POLICY, ROUTING_POLICY, SYSTEM_PROMPT,
+    _load_method, build_packet,
 )
 from classify_sensitive import classify
 import random
@@ -105,6 +106,15 @@ def main() -> None:
     check("总结与行动" in SYSTEM_PROMPT and "诚实但不泄气" in SYSTEM_PROMPT, "closing action summary prompt mismatch")
     check("不因当前日期变化重算原盘" in FOLLOW_UP_POLICY, "follow-up calendar lock missing")
     check("不自动重做 HTML 或分享图" in FOLLOW_UP_POLICY, "follow-up delivery lock missing")
+    # A reading leaked "本问属 general 领域": the existing rule asked for process
+    # states to stay silent, which a model can satisfy while still printing the
+    # raw enum. The rule now names the vocabulary and gives replacements.
+    check("程序内部标识符" in DELIVERY_POLICY, "delivery policy does not forbid internal identifiers")
+    for token in ("general", "shi_ying", "same_element", "selectionStatus"):
+        check(token in DELIVERY_POLICY, f"delivery policy does not name {token} as internal")
+    check("比和" in DELIVERY_POLICY and "以世应取用" in DELIVERY_POLICY,
+          "delivery policy forbids the identifiers without giving wording to use instead")
+
     check(classify("未来三个月求职是否顺利").allowed, "ordinary question was blocked")
     check(not classify("怀孕后孩子会不会健康").allowed, "sensitive pregnancy question was not blocked")
     check(classify("孩子在学校健康快乐吗").allowed, "ordinary child wellbeing question was over-blocked")
@@ -325,6 +335,22 @@ def main() -> None:
     check("选项 A（留在现公司）对应三爻" in option_narration, "narration lost an option binding")
     check("这才是可比的量" in option_narration, "narration does not point at the comparable quantity")
     check(verify_report(option_narration, compared_response)["accepted"], "option narration failed the audit")
+    # Every identifier the rule names must actually be able to appear in a payload,
+    # or the rule is warning about something that never reaches the model.
+    sample_payload = json.dumps(
+        json.loads(build_packet(compared_response)["messages"][1]["content"]), ensure_ascii=False
+    )
+    for token in ("career", "yongshen_multi", "same_element", "generated_by",
+                  "selectionStatus", "conclusionScope", "option_comparison"):
+        check(token in sample_payload, f"{token} is named in the rule but never appears in a payload")
+    # shi_ying reaches the model on the other mapping mode.
+    shi_ying_payload = build_packet(build_chart(
+        [7, 8, 8, 6, 7, 8], day_ganzhi="庚戌", month_branch="未",
+        cast_at="2026-08-04T11:17:00+08:00", question_category="career",
+        question_form="option_comparison", mapping_mode="shi_ying",
+        options=[{"optionId": "A", "label": "留任", "isStatusQuo": True}, {"optionId": "B", "label": "跳槽"}],
+    ))["messages"][1]["content"]
+    check("shi_ying" in shi_ying_payload, "shi_ying is named in the rule but never appears in a payload")
 
     stems, branches = "甲乙丙丁戊己庚辛壬癸", "子丑寅卯辰巳午未申酉戌亥"
     random.seed(11)
