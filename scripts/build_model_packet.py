@@ -58,17 +58,24 @@ FALLBACK_METHOD = (
 )
 
 
+# lineFacts and hiddenLineFacts are byte-identical to chart.lines and
+# chart.hiddenLines, and contextArguments embeds two more full line copies.
+# The payload is billed per token on every reading, so the lines are carried
+# once under chart and referenced by position everywhere else.
 DETERMINISTIC_FACT_FIELDS = (
     "schemaVersion",
     "schoolProfile",
     "shiPosition",
     "yingPosition",
-    "lineFacts",
-    "hiddenLineFacts",
     "branchRelationFacts",
     "threeHarmonyFacts",
     "punishmentFacts",
     "contextArguments",
+)
+
+LINE_REFERENCE_NOTE = (
+    "六爻与伏神的完整字段只在 chart.lines 与 chart.hiddenLines 出现一次；"
+    "其余位置一律按 position 引用，不重复内容。读到 position 时回 chart 取该爻。"
 )
 
 
@@ -110,6 +117,18 @@ def _select_fields(analysis: dict[str, Any], fields: tuple[str, ...]) -> dict[st
     return {key: analysis[key] for key in fields if key in analysis}
 
 
+def _without_line_copies(context: Any) -> Any:
+    """Drop the embedded 世/应 line objects, keeping their positions and relations."""
+    if not isinstance(context, dict):
+        return context
+    slim = dict(context)
+    for side in ("shi", "ying"):
+        entry = slim.get(side)
+        if isinstance(entry, dict):
+            slim[side] = {key: value for key, value in entry.items() if key != "line"}
+    return slim
+
+
 def build_packet(chart_response: dict[str, Any]) -> dict[str, Any]:
     chart_response = chart_response.get("result") or chart_response
     if not isinstance(chart_response, dict):
@@ -133,7 +152,11 @@ def build_packet(chart_response: dict[str, Any]) -> dict[str, Any]:
         "calendar": chart_response.get("calendar"),
         "castingAudit": chart_response.get("castingAudit"),
         "chart": chart,
-        "deterministicRuleFacts": _select_fields(analysis, DETERMINISTIC_FACT_FIELDS),
+        "deterministicRuleFacts": {
+            **_select_fields(analysis, DETERMINISTIC_FACT_FIELDS),
+            "contextArguments": _without_line_copies(analysis.get("contextArguments")),
+            "lineReference": LINE_REFERENCE_NOTE,
+        },
         "routingGuidance": {
             **_select_fields(analysis, ROUTING_GUIDANCE_FIELDS),
             "authority": "advisory",
@@ -150,7 +173,7 @@ def build_packet(chart_response: dict[str, Any]) -> dict[str, Any]:
     if analysis.get("optionMapping"):
         system_prompt = f"{system_prompt}\n{OPTION_POLICY}"
     return {
-        "schemaVersion": "fortune-liuyao-interpretation-packet.v1",
+        "schemaVersion": "fortune-liuyao-interpretation-packet.v2",
         "pipeline": [
             "deterministic_chart",
             "deterministic_rule_facts",

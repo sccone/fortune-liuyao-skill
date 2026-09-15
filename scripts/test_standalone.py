@@ -1,10 +1,13 @@
 """Small golden regression set for the standalone Skill runtime."""
 
+import json
 from pathlib import Path
 
 from cast_lines import _automatic_cast, _manual_cast
 from cast_one_line import cast_one
-from build_model_packet import FOLLOW_UP_POLICY, OPTION_POLICY, ROUTING_POLICY, SYSTEM_PROMPT, _load_method
+from build_model_packet import (
+    FOLLOW_UP_POLICY, OPTION_POLICY, ROUTING_POLICY, SYSTEM_PROMPT, _load_method, build_packet,
+)
 from classify_sensitive import classify
 from liuyao_core import build_chart
 from render_chart import render_html
@@ -280,6 +283,25 @@ def main() -> None:
     check("不可改写、不可调换" in OPTION_POLICY, "option policy does not freeze the bindings")
     check(OPTION_POLICY in packet_prompt, "option policy missing from option-comparison prompt")
     check(OPTION_POLICY not in one_shot["prompt"], "option policy leaked into an ordinary question")
+
+    # The payload is billed per token per reading, so the lines ride along exactly once.
+    packet = build_packet(one_shot["result"])
+    payload_text = packet["messages"][1]["content"]
+    payload = json.loads(payload_text)
+    facts = payload["deterministicRuleFacts"]
+    check(packet["schemaVersion"].endswith(".v2"), "packet schema version not bumped after dedup")
+    check("lineFacts" not in facts and "hiddenLineFacts" not in facts, "line copies returned to the payload")
+    check(len(payload["chart"]["lines"]) == 6, "payload lost the lines it must carry once")
+    check(
+        payload_text.count(json.dumps(payload["chart"]["lines"], ensure_ascii=False)) == 1,
+        "chart.lines appears more than once in the payload",
+    )
+    context = facts["contextArguments"]
+    check("line" not in context["shi"] and "line" not in context["ying"], "世/应 line copies returned")
+    check(context["shi"]["position"] == 2 and context["ying"]["position"] == 5, "世/应 positions lost in dedup")
+    check("shiYingBranchRelations" in context, "世应关系事实 lost in dedup")
+    check(all(key in facts for key in ("branchRelationFacts", "threeHarmonyFacts", "punishmentFacts")), "relation facts lost in dedup")
+    check("chart.lines" in facts.get("lineReference", ""), "payload does not say where the lines live")
 
     option_run = run(
         "留在现公司还是去 B 公司", "career", "lines", "Asia/Shanghai", "7,8,8,6,7,8", None,
