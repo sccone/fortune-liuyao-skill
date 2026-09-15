@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+
+# Chart artifacts. run_liuyao.py writes <stem>.html and <stem>.md into the
+# working directory whenever --artifact-dir is omitted, and --output <name>.json
+# derives the stem from it, so ordinary CLI runs leave these in the repo root.
+*-chart.html
+*-chart.md
+session.json
