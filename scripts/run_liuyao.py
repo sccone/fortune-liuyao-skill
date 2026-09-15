@@ -46,6 +46,25 @@ def parse_lines(raw: str) -> list[int]:
     return validate_lines([int(item) for item in re.split(r"[,，\s]+", raw.strip()) if item])
 
 
+def parse_option(raw: str) -> dict[str, object]:
+    """Parse `A=留在现公司` or `A=留在现公司:status_quo`."""
+    option_id, separator, remainder = raw.partition("=")
+    if not separator or not option_id.strip() or not remainder.strip():
+        raise ValueError(f"--option must look like ID=label[:status_quo]; got {raw!r}")
+    label, _, flag = remainder.rpartition(":")
+    if flag.strip() == "status_quo" and label.strip():
+        return {"optionId": option_id.strip(), "label": label.strip(), "isStatusQuo": True}
+    return {"optionId": option_id.strip(), "label": remainder.strip(), "isStatusQuo": False}
+
+
+def parse_binding(raw: str) -> dict[str, object]:
+    """Parse `A=line:3` or `A=hidden:3`."""
+    option_id, separator, ref = raw.partition("=")
+    if not separator or not option_id.strip() or not ref.strip():
+        raise ValueError(f"--bind must look like ID=line:N or ID=hidden:N; got {raw!r}")
+    return {"optionId": option_id.strip(), "ref": ref.strip()}
+
+
 def run(
     question: str,
     category: str,
@@ -56,6 +75,10 @@ def run(
     perspective: str | None = None,
     artifact_dir: Path | None = None,
     artifact_stem: str = "fortune-liuyao-chart",
+    question_form: str = "single_target",
+    options: list[dict[str, object]] | None = None,
+    mapping_mode: str | None = None,
+    bindings: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     safety = classify_dict(question)
     if not safety["allowed"]:
@@ -91,6 +114,10 @@ def run(
         question_category=category,
         question_text=question,
         question_perspective=perspective,
+        question_form=question_form,
+        options=options,
+        mapping_mode=mapping_mode,
+        bindings=bindings,
     )
     result["calendar"] = calendar
     result["castingAudit"]["method"] = method
@@ -197,6 +224,27 @@ def main() -> None:
         default="unspecified",
         help="Optional relationship perspective; do not request for unrelated domains",
     )
+    parser.add_argument(
+        "--question-form",
+        choices=("single_target", "option_comparison"),
+        default="single_target",
+        help="Use option_comparison for one matter split into mutually exclusive options",
+    )
+    parser.add_argument(
+        "--option",
+        action="append",
+        dest="options",
+        metavar="ID=label[:status_quo]",
+        help="Declare one option; repeat for each. Required by --question-form option_comparison",
+    )
+    parser.add_argument("--mapping-mode", choices=("shi_ying", "yongshen_multi"))
+    parser.add_argument(
+        "--bind",
+        action="append",
+        dest="bindings",
+        metavar="ID=line:N",
+        help="Bind an option to a chart position; required by yongshen_multi, rejected by shi_ying",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--artifact-dir", type=Path, help="Directory for synchronized HTML and Markdown chart files")
     parser.add_argument("--artifact-stem", default="fortune-liuyao-chart")
@@ -209,21 +257,38 @@ def main() -> None:
     if not args.question:
         parser.error("--question is required unless --selfcheck is used")
     perspective = None if args.perspective == "unspecified" else args.perspective
+    if args.question_form == "option_comparison":
+        if not args.mapping_mode:
+            parser.error("--question-form option_comparison requires --mapping-mode")
+    elif args.options or args.mapping_mode or args.bindings:
+        parser.error("--option, --mapping-mode and --bind require --question-form option_comparison")
+    try:
+        options = [parse_option(item) for item in args.options or []] or None
+        bindings = [parse_binding(item) for item in args.bindings or []] or None
+    except ValueError as error:
+        parser.error(str(error))
     artifact_dir = args.artifact_dir or (args.output.parent if args.output else Path.cwd())
     artifact_stem = args.artifact_stem
     if args.output and args.artifact_stem == "fortune-liuyao-chart":
         artifact_stem = f"{args.output.stem}-chart"
-    value = run(
-        args.question,
-        args.category,
-        args.method,
-        args.timezone,
-        args.lines,
-        args.coins,
-        perspective,
-        artifact_dir,
-        artifact_stem,
-    )
+    try:
+        value = run(
+            args.question,
+            args.category,
+            args.method,
+            args.timezone,
+            args.lines,
+            args.coins,
+            perspective,
+            artifact_dir,
+            artifact_stem,
+            args.question_form,
+            options,
+            args.mapping_mode,
+            bindings,
+        )
+    except ValueError as error:  # Refuse the chart with a readable message, never a traceback.
+        parser.error(str(error))
     text = json.dumps(value, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(text + "\n", encoding="utf-8")

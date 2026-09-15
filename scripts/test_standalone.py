@@ -4,18 +4,42 @@ from pathlib import Path
 
 from cast_lines import _automatic_cast, _manual_cast
 from cast_one_line import cast_one
-from build_model_packet import FOLLOW_UP_POLICY, ROUTING_POLICY, SYSTEM_PROMPT, _load_method
+from build_model_packet import FOLLOW_UP_POLICY, OPTION_POLICY, ROUTING_POLICY, SYSTEM_PROMPT, _load_method
 from classify_sensitive import classify
 from liuyao_core import build_chart
+from render_chart import render_html
 from render_chart_text import render
 from render_final_report import build_final_report
 from run_liuyao import run
 from verify_facts import verify_report
 
 
+PASSED = 0
+
+
 def check(condition: bool, message: str) -> None:
+    global PASSED
     if not condition:
         raise AssertionError(message)
+    PASSED += 1
+
+
+def check_rejected(action, message: str) -> None:
+    """A refused chart must raise; silently falling back would hide a bad mapping."""
+    global PASSED
+    try:
+        action()
+    except ValueError:
+        PASSED += 1
+        return
+    raise AssertionError(message)
+
+
+def embedded_data(html: str) -> str:
+    """Return only the JSON the renderer injected, never the template's own source text."""
+    marker = 'const EMBEDDED_JSON="'
+    start = html.index(marker) + len(marker)
+    return html[start:html.index('";', start)]
 
 
 def main() -> None:
@@ -120,7 +144,175 @@ def main() -> None:
     check("水雷屯" in final_html and "泽雷随" in final_html, "chart missing from final HTML")
     rejected_html, rejected_audit = build_final_report(one_shot, "本卦为乾为天。")
     check(not rejected_audit["accepted"] and not rejected_html, "invalid report produced final HTML")
-    print("standalone fortune-liuyao regression: 39/39 passed")
+
+    # Option comparison: the two 官鬼 of 水雷屯 (line 3 and line 5) stand in for two offers.
+    offers = [
+        {"optionId": "A", "label": "留在现公司", "isStatusQuo": True},
+        {"optionId": "B", "label": "去 B 公司"},
+    ]
+    def build_offer_chart(**overrides):
+        payload = {
+            "day_ganzhi": "庚戌", "month_branch": "未", "cast_at": "2026-08-04T11:17:00+08:00",
+            "question_category": "career", "question_form": "option_comparison",
+            "options": offers, "mapping_mode": "yongshen_multi",
+            "bindings": [{"optionId": "A", "ref": "line:3"}, {"optionId": "B", "ref": "line:5"}],
+        }
+        payload.update(overrides)
+        return build_chart([7, 8, 8, 6, 7, 8], **payload)
+
+    compared = build_offer_chart()["analysis"]
+    mapping = compared["optionMapping"]
+    check(mapping["mappingMode"] == "yongshen_multi", "option mapping mode mismatch")
+    check(mapping["declaredBefore"] == "cast", "option mapping is not frozen to cast time")
+    check([item["ref"] for item in mapping["bindings"]] == ["line:3", "line:5"], "option bindings mismatch")
+    check(mapping["conclusionScope"] == "option_comparison_only_not_outcome", "option mapping scope mismatch")
+    check(mapping["unmappedCandidates"] == [], "both 官鬼 candidates should be bound")
+    check([item["optionId"] for item in compared["optionArguments"]] == ["A", "B"], "option arguments mismatch")
+    check(mapping["boundRelatives"] == {"A": "官鬼", "B": "官鬼"}, "bound relatives mismatch")
+    check(mapping["strengthComparable"] is True, "same-relative options were marked incomparable")
+    check(all(item["carriesYongshen"] for item in compared["optionArguments"]), "bound 官鬼 lines not flagged as yongshen")
+    check(
+        compared["optionArguments"][0]["yongshenLinks"] == [{"ref": "line:5", "relationFromYongshen": "same_element"}],
+        "yongshen link mismatch",
+    )
+    check(all(item["sixRelative"] == "官鬼" for item in compared["optionArguments"]), "options bound to wrong relative")
+    check(compared["selectionStatus"] == "suspended_for_option_comparison", "用神多现 tie-break was not suspended")
+    check(len(compared["candidates"]) == 2 and len(compared["candidateArguments"]) == 2, "消歧 arrays were overwritten by 择优")
+    check(compared["questionContext"]["questionForm"] == "option_comparison", "questionForm not recorded")
+    check([item["optionId"] for item in compared["questionContext"]["options"]] == ["A", "B"], "options not recorded")
+
+    shi_ying = build_chart(
+        [7, 8, 8, 6, 7, 8],
+        day_ganzhi="庚戌", month_branch="未", cast_at="2026-08-04T11:17:00+08:00",
+        question_category="career", question_form="option_comparison",
+        options=offers, mapping_mode="shi_ying",
+    )["analysis"]
+    check(
+        [(item["optionId"], item["ref"], item["basis"]) for item in shi_ying["optionMapping"]["bindings"]]
+        == [("A", "line:2", "shi"), ("B", "line:5", "ying")],
+        "shi_ying bindings were not derived from 世/应",
+    )
+    check(shi_ying["selectionStatus"] == "candidates_identified", "shi_ying must not suspend 用神消歧")
+    check(shi_ying["optionMapping"]["tieBreak"] == "status_quo", "status quo did not decide the 世 side")
+    fresh = build_chart(
+        [7, 8, 8, 6, 7, 8],
+        day_ganzhi="庚戌", month_branch="未", cast_at="2026-08-04T11:17:00+08:00",
+        question_category="general", question_form="option_comparison",
+        options=[{"optionId": "A", "label": "饭店A"}, {"optionId": "B", "label": "饭店B"}],
+        mapping_mode="shi_ying",
+    )["analysis"]["optionMapping"]
+    check(fresh["tieBreak"] == "declaration_order", "two fresh options did not fall back to declaration order")
+    # 六亲 follows the chart, not the options: two same-kind options routinely land on different ones.
+    check(fresh["boundRelatives"] == {"A": "子孙", "B": "官鬼"}, "shi_ying bound relatives mismatch")
+    check(fresh["strengthComparable"] is False, "mixed-relative options were not flagged incomparable")
+    career_shi_ying = build_chart(
+        [7, 8, 8, 6, 7, 8],
+        day_ganzhi="庚戌", month_branch="未", cast_at="2026-08-04T11:17:00+08:00",
+        question_category="career", question_form="option_comparison", mapping_mode="shi_ying",
+        options=[{"optionId": "A", "label": "留任", "isStatusQuo": True}, {"optionId": "B", "label": "跳槽"}],
+    )["analysis"]
+    shi_side, ying_side = career_shi_ying["optionArguments"]
+    check(not shi_side["carriesYongshen"] and ying_side["carriesYongshen"], "yongshen side mismatch under shi_ying")
+    check(
+        [item["relationFromYongshen"] for item in shi_side["yongshenLinks"]] == ["controlled_by", "controlled_by"],
+        "yongshen relation to the 世 side mismatch",
+    )
+    check(career_shi_ying["optionMapping"]["strengthComparable"] is False, "子孙/官鬼 split was treated as comparable")
+    check(
+        [(item["optionId"], item["basis"]) for item in fresh["bindings"]] == [("A", "shi"), ("B", "ying")],
+        "declaration order did not put the first option on 世",
+    )
+    check_rejected(
+        lambda: build_chart(
+            [7, 8, 8, 6, 7, 8], day_ganzhi="庚戌", month_branch="未", cast_at="2026-08-04T11:17:00+08:00",
+            question_category="general", question_form="option_comparison", mapping_mode="shi_ying",
+            options=[{"optionId": "A", "label": "甲", "isStatusQuo": True}, {"optionId": "B", "label": "乙", "isStatusQuo": True}],
+        ),
+        "two status-quo options accepted",
+    )
+
+    hidden_bound = build_offer_chart(bindings=[{"optionId": "A", "ref": "line:3"}, {"optionId": "B", "ref": "hidden:3"}])["analysis"]
+    hidden_argument = hidden_bound["optionArguments"][1]
+    check(hidden_argument["hidden"] and hidden_argument["sixRelative"] == "妻财", "hidden binding resolved to the wrong line")
+    check(hidden_argument["strengthStatus"] == "not_computed_for_hidden", "hidden binding faked a strength status")
+    check(hidden_bound["optionMapping"]["unmappedCandidates"] == ["line:5"], "unbound 官鬼 candidate was not reported")
+
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ref": "line:3"}]), "missing binding accepted")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ref": "line:9"}, {"optionId": "B", "ref": "line:5"}]), "nonexistent ref accepted")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ref": "line:3"}, {"optionId": "C", "ref": "line:5"}]), "undeclared optionId accepted")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ref": "line:3"}, {"optionId": "B", "ref": "line:3"}]), "two options sharing one position accepted")
+    check_rejected(lambda: build_offer_chart(options=[offers[0]]), "single-option comparison accepted")
+    check_rejected(lambda: build_offer_chart(options=[offers[0], dict(offers[0])]), "duplicate optionId accepted")
+    check_rejected(lambda: build_offer_chart(mapping_mode="shi_ying"), "shi_ying accepted manual bindings")
+    check_rejected(lambda: build_offer_chart(mapping_mode=None), "missing mappingMode accepted")
+    check_rejected(
+        lambda: build_chart(
+            [7, 8, 8, 6, 7, 8], day_ganzhi="庚戌", month_branch="未", cast_at="2026-08-04T11:17:00+08:00",
+            question_category="travel", question_form="option_comparison", options=offers, mapping_mode="shi_ying",
+        ),
+        "shi_ying accepted a domain whose yongshen is 世爻",
+    )
+    check_rejected(
+        lambda: build_chart(
+            [7, 8, 8, 6, 7, 8], day_ganzhi="庚戌", month_branch="未", cast_at="2026-08-04T11:17:00+08:00",
+            question_category="career", options=offers,
+        ),
+        "options accepted without questionForm option_comparison",
+    )
+
+    compared_response = {"chart": build_offer_chart()["chart"], "analysis": compared}
+    check(verify_report("选项 A 对应第三爻，选项 B 对应第5爻。", compared_response)["accepted"], "correct option binding was rejected")
+    wrong_bind = verify_report("选项 B 落在第三爻。", compared_response)
+    check(not wrong_bind["accepted"] and wrong_bind["errors"][0]["type"] == "option_binding", "wrong option binding escaped audit")
+    unknown_option = verify_report("选项 C 更有利。", compared_response)
+    check(not unknown_option["accepted"] and unknown_option["errors"][0]["type"] == "option_unbound", "undeclared option escaped audit")
+    check(verify_report("选项 B 更有利，宜在申月推进。", compared_response)["accepted"], "option preference was incorrectly constrained")
+    check(verify_report("选项 A 对应第三爻。", one_shot["result"])["accepted"], "option audit fired on a single-target chart")
+
+    packet_prompt = run(
+        "留在现公司还是去 B 公司", "career", "lines", "Asia/Shanghai", "7,8,8,6,7,8", None,
+        question_form="option_comparison", options=offers, mapping_mode="yongshen_multi",
+        bindings=[{"optionId": "A", "ref": "line:3"}, {"optionId": "B", "ref": "line:5"}],
+    )["prompt"]
+    check('"optionMapping"' in packet_prompt and '"optionArguments"' in packet_prompt, "option fields missing from Agent packet")
+    check('"optionMapping"' not in packet_prompt.split('"routingGuidance"', 1)[0], "option mapping leaked into deterministic facts")
+    check("用神旺相只说明它是用神" in OPTION_POLICY, "option policy does not separate 消歧 from 择优")
+    check("不可改写、不可调换" in OPTION_POLICY, "option policy does not freeze the bindings")
+    check(OPTION_POLICY in packet_prompt, "option policy missing from option-comparison prompt")
+    check(OPTION_POLICY not in one_shot["prompt"], "option policy leaked into an ordinary question")
+
+    option_run = run(
+        "留在现公司还是去 B 公司", "career", "lines", "Asia/Shanghai", "7,8,8,6,7,8", None,
+        question_form="option_comparison", options=offers, mapping_mode="yongshen_multi",
+        bindings=[{"optionId": "A", "ref": "line:3"}, {"optionId": "B", "ref": "hidden:3"}],
+    )
+    option_html = render_html(option_run)
+    viewer_template = (project_root / "assets" / "liuyao-viewer.html").read_text(encoding="utf-8")
+    check("选项对比" in viewer_template and "用神两现取用" in viewer_template, "viewer cannot label the option mapping")
+    check("optByRef" in viewer_template and "refText" in viewer_template, "viewer cannot mark bound lines")
+    # The template carries those identifiers itself, so assert on the injected data only.
+    check("optionMapping" in embedded_data(option_html), "viewer HTML lacks the frozen bindings")
+    check("hidden:3" in embedded_data(option_html), "viewer HTML lost the hidden binding")
+    check("optionMapping" not in embedded_data(render_html(one_shot)), "option mapping surfaced on a single-target chart")
+    option_markdown = render(option_run["result"])
+    check("- A 留在现公司 → 第3爻" in option_markdown, "Markdown review copy lost the line binding")
+    check("- B 去 B 公司 → 第3爻伏神 妻财" in option_markdown, "Markdown review copy lost the hidden binding")
+    check("旺衰非同类比" in option_markdown, "Markdown review copy lost the comparability caveat")
+    check("各选项六亲不同，旺衰非同类比" in viewer_template, "viewer cannot warn about incomparable strength")
+
+    routing_guide = (project_root / "references" / "domain-routing.md").read_text(encoding="utf-8")
+    modes_guide = (project_root / "references" / "interpretation-modes.md").read_text(encoding="utf-8")
+    frontend_guide = (project_root / "references" / "frontend-contract.md").read_text(encoding="utf-8")
+    check("互斥选项" in routing_guide and "映射必须在起卦前声明" in routing_guide, "routing guide lacks the option-comparison rule")
+    check("判断目标与时间范围是否一致" in routing_guide, "routing guide lacks the independent-vs-exclusive test")
+    check("消歧与择优是两条链路，互不替代" in modes_guide, "interpretation guide conflates 消歧 with 择优")
+    check("suspended_for_option_comparison" in modes_guide, "interpretation guide lacks the suspension rule")
+    check("strengthComparable" in modes_guide and "不是同类比" in modes_guide, "interpretation guide lacks the comparability rule")
+    check("与选项本身是什么无关" in modes_guide, "interpretation guide does not explain where 六亲 comes from")
+    check("绑定爻位" in frontend_guide, "frontend contract does not require visible bindings")
+    check("--question-form option_comparison" in skill_text, "SKILL.md does not document the option flags")
+    check("映射必须在起卦前声明" in skill_text, "SKILL.md does not state the pre-cast declaration rule")
+    print(f"standalone fortune-liuyao regression: {PASSED}/{PASSED} passed")
 
 
 if __name__ == "__main__":
