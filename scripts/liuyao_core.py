@@ -372,6 +372,16 @@ def _build_option_mapping(
     """Bind declared options to chart positions. Refuse to guess: a wrong binding is unfalsifiable."""
     if mapping_mode not in MAPPING_MODES:
         raise ValueError(f"mappingMode must be one of {MAPPING_MODES}; got {mapping_mode!r}")
+    # Exhaustively true across all 64 hexagrams: a 六亲 occupies at most two of
+    # the six lines, hidden appearances included. So yongshen_multi can never
+    # carry three options, whatever the bindings say, and saying so here beats
+    # letting a cast proceed and fail on the ordinal lookup.
+    if mapping_mode == "yongshen_multi" and len(options) > 2:
+        raise ValueError(
+            f"yongshen_multi cannot carry {len(options)} options: a 六亲 occupies at most "
+            "two of the six lines, so only two can be bound to separate appearances. "
+            "Ask about two options at a time."
+        )
     if mapping_mode == "shi_ying":
         if len(options) != 2:
             raise ValueError("shi_ying mapping supports exactly two options")
@@ -390,26 +400,64 @@ def _build_option_mapping(
         resolved = [(first, f"line:{shi_position}", "shi"), (other, f"line:{ying_position}", "ying")]
     else:
         declared: dict[str, str] = {}
+        ordinals: dict[str, int] = {}
         for binding in bindings or []:
             if not isinstance(binding, dict):
                 raise ValueError("each binding must be an object")
             option_id = str(binding.get("optionId") or "").strip()
             ref = str(binding.get("ref") or "").strip()
-            if not option_id or not ref:
-                raise ValueError("each binding requires optionId and ref")
-            if option_id in declared:
+            ordinal = binding.get("ordinal")
+            if not option_id:
+                raise ValueError("each binding requires optionId")
+            if option_id in declared or option_id in ordinals:
                 raise ValueError(f"duplicate binding for option {option_id}")
-            declared[option_id] = ref
+            if ref and ordinal is not None:
+                raise ValueError(f"binding for option {option_id} sets both ref and ordinal")
+            if ordinal is not None:
+                # An ordinal names which appearance of the yongshen to take,
+                # counting the six lines bottom-up and then any hidden ones. It
+                # exists because a concrete position cannot be known before the
+                # cast, which made "declared before the cast" impossible to honour
+                # for this mapping mode.
+                if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
+                    raise ValueError(f"ordinal for option {option_id} must be a positive integer")
+                ordinals[option_id] = ordinal
+            elif ref:
+                declared[option_id] = ref
+            else:
+                raise ValueError(f"binding for option {option_id} requires either ref or ordinal")
+
         known = {option["optionId"] for option in options}
-        missing = sorted(known - set(declared))
+        if declared and ordinals:
+            raise ValueError("bindings must use either refs or ordinals, not a mix of both")
+        bound = declared or ordinals
+        missing = sorted(known - set(bound))
         if missing:
             raise ValueError(f"yongshen_multi mapping requires a binding for every option; missing {missing}")
-        unknown = sorted(set(declared) - known)
+        unknown = sorted(set(bound) - known)
         if unknown:
             raise ValueError(f"binding refers to undeclared optionId: {unknown}")
-        if len(set(declared.values())) != len(declared):
-            raise ValueError("two options cannot bind to the same chart position")
-        tie_break = "explicit_binding"
+        if len(set(bound.values())) != len(bound):
+            raise ValueError("two options cannot bind to the same yongshen appearance")
+
+        if ordinals:
+            # Resolved against this cast's own candidates, in the order the engine
+            # collected them: the visible lines bottom-up, then the hidden ones.
+            appearances = [
+                f"{'hidden' if candidate.get('hidden') else 'line'}:{candidate['position']}"
+                for candidate in candidates
+            ]
+            over = {oid: n for oid, n in ordinals.items() if n > len(appearances)}
+            if over:
+                raise ValueError(
+                    f"the chart shows {len(appearances)} appearance(s) of the yongshen, "
+                    f"but {sorted(over)} asked for {sorted(over.values())}. "
+                    "Re-ask with shi_ying, or with fewer options."
+                )
+            declared = {oid: appearances[n - 1] for oid, n in ordinals.items()}
+            tie_break = "ordinal_rule"
+        else:
+            tie_break = "explicit_binding"
         resolved = [(option, declared[option["optionId"]], "yongshen_appearance") for option in options]
 
     shi_line = lines[shi_position - 1]

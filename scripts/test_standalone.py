@@ -261,6 +261,60 @@ def main() -> None:
     check_rejected(lambda: build_offer_chart(options=[offers[0], dict(offers[0])]), "duplicate optionId accepted")
     check_rejected(lambda: build_offer_chart(mapping_mode="shi_ying"), "shi_ying accepted manual bindings")
     check_rejected(lambda: build_offer_chart(mapping_mode=None), "missing mappingMode accepted")
+
+    # Ordinals name which appearance of the yongshen to take, because a concrete
+    # position cannot be known before the cast -- which is what made "declared
+    # before the cast" impossible to honour for this mapping mode.
+    by_ordinal = build_offer_chart(
+        bindings=[{"optionId": "A", "ordinal": 1}, {"optionId": "B", "ordinal": 2}]
+    )["analysis"]["optionMapping"]
+    check(by_ordinal["tieBreak"] == "ordinal_rule", "ordinal binding not recorded as such")
+    check([b["ref"] for b in by_ordinal["bindings"]] == ["line:3", "line:5"],
+          "ordinals did not resolve to this chart's yongshen appearances")
+    check(by_ordinal["strengthComparable"] is True,
+          "ordinal binding should land both options on the same 六亲")
+
+    # The same rule must follow the chart rather than a fixed position.
+    elsewhere = build_chart(
+        [7, 7, 7, 8, 8, 7], day_ganzhi="庚戌", month_branch="未",
+        cast_at="2026-08-04T11:17:00+08:00", question_category="career",
+        question_form="option_comparison", mapping_mode="yongshen_multi",
+        options=offers, bindings=[{"optionId": "A", "ordinal": 1}, {"optionId": "B", "ordinal": 2}],
+    )["analysis"]["optionMapping"]
+    check([b["ref"] for b in elsewhere["bindings"]] == ["line:2", "line:6"],
+          "the ordinal rule did not follow the other chart's own appearances")
+
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ordinal": 1}, {"optionId": "B", "ordinal": 9}]),
+                   "ordinal beyond the yongshen's appearances accepted")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ordinal": 1}, {"optionId": "B", "ordinal": 1}]),
+                   "two options on one appearance accepted")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ordinal": 0}, {"optionId": "B", "ordinal": 2}]),
+                   "ordinal 0 accepted")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ordinal": True}, {"optionId": "B", "ordinal": 2}]),
+                   "a bool was accepted as an ordinal")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ref": "line:3"}, {"optionId": "B", "ordinal": 2}]),
+                   "refs and ordinals were mixed")
+    check_rejected(lambda: build_offer_chart(bindings=[{"optionId": "A", "ref": "line:3", "ordinal": 1}, {"optionId": "B", "ordinal": 2}]),
+                   "one binding carried both ref and ordinal")
+
+    # A 六亲 occupies at most two of the six lines in all 64 hexagrams, so three
+    # options can never be bound to separate appearances.
+    check_rejected(
+        lambda: build_offer_chart(
+            options=[{"optionId": o, "label": o} for o in ("A", "B", "C")],
+            bindings=[{"optionId": o, "ordinal": n} for n, o in enumerate(("A", "B", "C"), 1)],
+        ),
+        "yongshen_multi accepted three options",
+    )
+    import itertools as _itertools
+    worst = 0
+    for pattern in _itertools.product([7, 8], repeat=6):
+        for domain in ("career", "wealth", "academic", "home", "legal_risk"):
+            worst = max(worst, len(build_chart(
+                list(pattern), day_ganzhi="甲子", month_branch="子",
+                cast_at="2026-01-01T12:00:00+08:00", question_category=domain,
+            )["analysis"]["candidates"]))
+    check(worst == 2, f"a yongshen appeared {worst} times; the two-option limit rests on this")
     check_rejected(
         lambda: build_chart(
             [7, 8, 8, 6, 7, 8], day_ganzhi="庚戌", month_branch="未", cast_at="2026-08-04T11:17:00+08:00",
