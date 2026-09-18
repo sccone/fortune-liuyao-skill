@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lexicon import normalize
+
 
 SYSTEM_PROMPT = """你是一名重视纳甲、用神、世应、月日动变与应期条件的六爻研究者。
 程序提供的排盘和规则事实不可改写；不要重新计算纳甲、六亲、世应、六神、旬空、动变或伏神。
@@ -25,6 +27,19 @@ ROUTING_POLICY = """领域路由由当前 Agent 根据用户完整问题的语�
 
 DELIVERY_POLICY = """排盘展示不是最终回答。当前聊天回复才是主要交付物，必须继续完成 analysisMethod 要求的综合解读，不得只复述卦名、六亲、给一段简短概括或把全文放进附件；但不要为了篇幅机械扩写。发送前静默确认已经回答所问，解释用神、世应、月日和关键动变如何支持结论，覆盖会实质改变判断的其他结构，并在适用时回答时间趋势和现实建议。敏感分流放行、领域路由、脚本执行、事实校验通过等过程状态属于内部信息，成功时保持静默；只有问题被阻止或发现必须修正的事实冲突时才对用户说明必要结果。传统健康取象属于模型推断，不得伪装成医学诊断，也不得替代现实就医。
 payload 里的字段名及其取值是程序内部标识符，不是写给用户的词，解读正文一律不得出现。包括但不限于 general、career、relationship 等领域代码，shi_ying、yongshen_multi、option_comparison、single_target 等格式代码，same_element、generated_by、controlled_by、day_clash、punishment_component 等关系代码，以及 selectionStatus、strengthComparable、conclusionScope 等字段名。不要写“本问属 general 领域”“selectionStatus 为 X”这类复述；要表达同一含义就改用自然中文，例如 same_element 写成“比和”、generated_by 写成“泄气于月建”、shi_ying 写成“以世应取用”、六亲与爻位直接写“官鬼”“三爻”。读者看到的应当是一份六爻解读，而不是一份字段转述。"""
+
+
+# The method discipline above stays in Chinese in both languages: it is the part
+# that took the longest to get right, and translating it would mean maintaining
+# two versions of the same reasoning rules and hoping they stay in step. The
+# model reads the method in Chinese and writes the answer in the asked-for
+# language, which is a thing models do reliably and a thing this layer can check.
+LANGUAGE_POLICY = {
+    "zh": "",
+    "en": """整份回复必须用英文写给用户，包括标题、结论和总结与行动。方法与内部判断仍按上述中文规则执行，但正文不得出现中文字符。
+术语按以下固定译法，事实审计按这套译法核对，写错会被拦下：六亲写 Parent / Sibling / Offspring / Wealth / Officer；世写 Shi，应写 Ying，并写成 "Shi is on line 2" 这样的形式（初爻写 the bottom line，上爻写 the top line，其余写 line 2 到 line 5）；纳甲写成 Geng-Xu 这样的拼音连字形式，不要译成动物或意象；六神写 Azure Dragon / Vermilion Bird / Hooked Chen / Soaring Snake / White Tiger / Dark Warrior；五行写 Metal / Wood / Water / Fire / Earth；卦名写成 "Water over Thunder - Zhun"，八纯卦写成 "Water Doubled - Kan"。用神保留 yongshen 一词并在首次出现时用一句话说明它是本卦所取的关键六亲。
+文末必须原样附上这句英文，不得改写、不得再附中文版：This content is generated from a metaphysical tradition, for cultural interest and reflection only. It is not professional advice for any significant life decision.""",
+}
 
 
 FOLLOW_UP_POLICY = """若用户在当前对话继续追问同一事项，沿用本次 payload 锁定的原始占问、起卦时间、月日、爻值、chart、deterministicRuleFacts、用神主线和首次判断，不重新起卦，不因当前日期变化重算原盘，也不为了迎合用户改写首次结论。原因、应期和术语追问直接补充；主动、等待或换方案属于原事项下的策略分析，不得写成新盘面事实；现实进展未改变事项、对象、目标和时间范围时继续沿用原盘，发生实质变化时才说明需要新占问；反馈结果时按原条件复盘，不事后改写结论。后续回答直接回应新问题，给最相关原盘依据和一个现实行动，不机械重复整篇报告，不自动重做 HTML 或分享图。"""
@@ -130,7 +145,7 @@ def _without_line_copies(context: Any) -> Any:
     return slim
 
 
-def build_packet(chart_response: dict[str, Any]) -> dict[str, Any]:
+def build_packet(chart_response: dict[str, Any], language: str = "zh") -> dict[str, Any]:
     chart_response = chart_response.get("result") or chart_response
     if not isinstance(chart_response, dict):
         raise ValueError("chart response must be an object or contain an object at 'result'")
@@ -173,6 +188,10 @@ def build_packet(chart_response: dict[str, Any]) -> dict[str, Any]:
     system_prompt = f"{SYSTEM_PROMPT}\n{ROUTING_POLICY}\n{DELIVERY_POLICY}\n{FOLLOW_UP_POLICY}"
     if analysis.get("optionMapping"):
         system_prompt = f"{system_prompt}\n{OPTION_POLICY}"
+    # Last, so it is the most recent instruction the model reads before the chart.
+    output_language = LANGUAGE_POLICY.get(normalize(language), "")
+    if output_language:
+        system_prompt = f"{system_prompt}\n{output_language}"
     return {
         "schemaVersion": "fortune-liuyao-interpretation-packet.v2",
         "pipeline": [

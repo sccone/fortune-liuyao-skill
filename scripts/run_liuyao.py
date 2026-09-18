@@ -79,6 +79,7 @@ def run(
     options: list[dict[str, object]] | None = None,
     mapping_mode: str | None = None,
     bindings: list[dict[str, object]] | None = None,
+    language: str = "zh",
 ) -> dict[str, object]:
     safety = classify_dict(question)
     if not safety["allowed"]:
@@ -123,7 +124,7 @@ def run(
     result["castingAudit"]["method"] = method
     result["castingAudit"]["rounds"] = rounds
     result["analysis"]["questionContext"]["deadline"] = infer_deadline(question)
-    packet = build_packet(result)
+    packet = build_packet(result, language)
     prompt = "\n\n".join(str(message["content"]) for message in packet["messages"])
     response: dict[str, object] = {
         "schemaVersion": OUTPUT_SCHEMA_VERSION,
@@ -245,6 +246,12 @@ def main() -> None:
         metavar="ID=line:N",
         help="Bind an option to a chart position; required by yongshen_multi, rejected by shi_ying",
     )
+    parser.add_argument(
+        "--language",
+        choices=("zh", "en"),
+        default="zh",
+        help="Language for the interpretation the model is asked to write; the chart itself is unchanged",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--artifact-dir", type=Path, help="Directory for synchronized HTML and Markdown chart files")
     parser.add_argument("--artifact-stem", default="fortune-liuyao-chart")
@@ -286,6 +293,7 @@ def main() -> None:
             options,
             args.mapping_mode,
             bindings,
+            args.language,
         )
     except ValueError as error:  # Refuse the chart with a readable message, never a traceback.
         parser.error(str(error))
