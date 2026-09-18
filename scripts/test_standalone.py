@@ -546,6 +546,13 @@ def main() -> None:
         check(f"{character}={roman}" in english_prompt,
               f"the English directive has no romanization for {character}")
     check("yingqi" in english_prompt, "the English directive does not romanize 应期")
+    # A live reading wrote "Officer (官鬼)" against a directive that banned Chinese
+    # outright. Glossing a term once is the convention in English writing on this
+    # subject and helps a reader cross-reference, so the rule now permits exactly
+    # that and forbids the rest -- a prompt carrying a rule the model sensibly
+    # breaks weakens every other rule in it.
+    check("Officer (官鬼)" in english_prompt, "the English directive does not allow a first-mention gloss")
+    check("不再重复附注" in english_prompt, "the English directive does not bound the gloss to first mention")
 
     print(f"standalone fortune-liuyao regression: {PASSED}/{PASSED} passed")
 
