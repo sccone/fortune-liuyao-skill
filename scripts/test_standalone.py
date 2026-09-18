@@ -13,6 +13,7 @@ from classify_sensitive import classify
 import random
 
 from liuyao_core import build_chart
+from lexicon import SIX_RELATIVE as LEXICON_SIX_RELATIVE, chart_lexicon, hexagram as hexagram_name
 from narrate_facts import narrate
 from render_chart import render_html
 from render_chart_text import render
@@ -460,6 +461,81 @@ def main() -> None:
     check("绑定爻位" in frontend_guide, "frontend contract does not require visible bindings")
     check("--question-form option_comparison" in skill_text, "SKILL.md does not document the option flags")
     check("映射必须在起卦前声明" in skill_text, "SKILL.md does not state the pre-cast declaration rule")
+    # --- language ---------------------------------------------------------
+    # Chinese is the engine's native form. Any drift here means a language
+    # feature quietly rewrote readings nobody asked to change.
+    for combo in ("7,8,8,6,7,8", "9,6,9,6,9,6", "8,8,8,8,8,8"):
+        native = run("测试问题", "career", "lines", "Asia/Shanghai", combo, None)["result"]
+        check(narrate(native, "zh") == narrate(native), "language argument changed the Chinese default")
+        check(narrate(native, "nonsense") == narrate(native), "an unknown language did not fall back to Chinese")
+
+    # Its own fixture rather than whatever the random sweep happened to leave
+    # behind, and an English question, since the narration echoes the question
+    # verbatim and must not be blamed for the caller's own characters.
+    sample = build_chart(
+        [9, 8, 8, 6, 7, 8], day_ganzhi="庚戌", month_branch="未",
+        cast_at="2026-08-04T11:17:00+08:00", question_category="career",
+        question_text="Is this a good time to change jobs",
+    )
+    english = narrate(sample, "en")
+    check("## The Chart" in english, "English narration lost its headings")
+    check(not any("\u4e00" <= ch <= "\u9fff" for ch in english), "English narration leaked Chinese characters")
+    check("Geng-" in english or "-Xu" in english or "Jia-" in english, "English narration lost the najia pair")
+    for banned in ("None", "{", "}"):
+        check(banned not in english, f"English narration leaked {banned!r} from a template")
+
+    # A term the engine can emit but the lexicon has never heard of surfaces as
+    # untranslated Chinese in an English chart, and only for the charts that
+    # happen to contain it -- so sweep rather than spot-check. This is how the
+    # engine's 腾蛇 was found sitting next to the lexicon's 螣蛇.
+    seen_names, seen_terms = set(), set()
+    for _ in range(200):
+        chart = run("测试问题", "general", "auto", "Asia/Shanghai", None, None)["result"]
+        table = chart_lexicon(chart, "en")
+        for key in ("originalHexagram", "changedHexagram"):
+            name = chart["chart"][key]["name"]
+            seen_names.add(name)
+            check(hexagram_name(name, "en") != name, f"hexagram {name} has no English rendering")
+            check(hexagram_name(name, "zh") == name, "Chinese hexagram name was rewritten")
+        rows = list(chart["chart"]["lines"]) + list(chart["chart"].get("hiddenLines") or [])
+        for row in rows:
+            for field in ("sixRelative", "sixSpirit", "najiaStem", "najiaBranch", "najiaElement"):
+                value = row.get(field)
+                if value:
+                    seen_terms.add(value)
+                    check(value in table, f"lexicon is missing {field} {value!r}")
+    check(len(seen_names) > 30, "hexagram sweep did not cover enough of the 64")
+    check(len(seen_terms) >= 30, "term sweep did not cover enough of the vocabulary")
+
+    lexicon_en = chart_lexicon(sample, "en")
+    check(chart_lexicon(sample, "zh") == {}, "Chinese asked for a translation table it does not need")
+    check(all(value != key for key, value in lexicon_en.items()), "lexicon returned an untranslated entry")
+
+    # The audit is the only thing between a reading and a misstated chart, so it
+    # has to bite in the language the reading was written in. A pattern written
+    # in the wrong word order fails silently: nothing matches, and the reading is
+    # accepted without ever being checked.
+    check(verify_report(narrate(sample, "en"), sample)["accepted"], "English narration failed its own audit")
+    shi, ying = sample["chart"]["shiPosition"], sample["chart"]["yingPosition"]
+    wrong_line = 1 + (0 if sample["chart"]["lines"][0]["sixRelative"] != "妻财" else 1)
+    wrong_relative = "Wealth" if sample["chart"]["lines"][wrong_line - 1]["sixRelative"] != "妻财" else "Officer"
+    for claim in (
+        f"Line {wrong_line} is the {wrong_relative}.",
+        f"Shi is on line {1 + shi % 6}.",
+        f"Ying sits on line {1 + ying % 6}.",
+    ):
+        check(not verify_report(claim, sample)["accepted"], f"English audit missed a false claim: {claim}")
+    true_relative = LEXICON_SIX_RELATIVE[sample["chart"]["lines"][shi - 1]["sixRelative"]]
+    check(verify_report(f"Line {shi} is the {true_relative}.", sample)["accepted"],
+          "English audit rejected a true claim")
+    check(verify_report(f"Shi is on line {shi}.", sample)["accepted"], "English audit rejected a true Shi claim")
+
+    english_prompt = build_packet(sample, "en")["messages"][0]["content"]
+    check(build_packet(sample, "zh") == build_packet(sample), "language argument changed the default packet")
+    check(SYSTEM_PROMPT in english_prompt, "English packet dropped the method discipline")
+    check("not professional advice" in english_prompt, "English packet lost the English disclaimer")
+    check("Shi is on line 2" in english_prompt, "English packet does not fix the Shi/Ying wording the audit checks")
+
     print(f"standalone fortune-liuyao regression: {PASSED}/{PASSED} passed")
 
 
