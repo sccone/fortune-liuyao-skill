@@ -37,7 +37,7 @@ payload 里的字段名及其取值是程序内部标识符，不是写给用户
 LANGUAGE_POLICY = {
     "zh": "",
     "en": """整份回复必须用英文写给用户，包括标题、结论和总结与行动。方法与内部判断仍按上述中文规则执行，但正文不得出现中文字符。
-术语按以下固定译法，事实审计按这套译法核对，写错会被拦下：六亲写 Parent / Sibling / Offspring / Wealth / Officer；世写 Shi，应写 Ying，并写成 "Shi is on line 2" 这样的形式（初爻写 the bottom line，上爻写 the top line，其余写 line 2 到 line 5）；纳甲写成 Geng-Xu 这样的拼音连字形式，不要译成动物或意象；六神写 Azure Dragon / Vermilion Bird / Hooked Chen / Soaring Snake / White Tiger / Dark Warrior；五行写 Metal / Wood / Water / Fire / Earth；卦名写成 "Water over Thunder - Zhun"，八纯卦写成 "Water Doubled - Kan"。用神保留 yongshen 一词并在首次出现时用一句话说明它是本卦所取的关键六亲。
+术语按以下固定译法，事实审计按这套译法核对，写错会被拦下：六亲写 Parent / Sibling / Offspring / Wealth / Officer；世写 Shi，应写 Ying，并写成 "Shi is on line 2" 这样的形式（初爻写 the bottom line，上爻写 the top line，其余写 line 2 到 line 5）；纳甲写成 Geng-Xu 这样的拼音连字形式，不要译成动物或意象；六神写 Azure Dragon / Vermilion Bird / Hooked Chen / Soaring Snake / White Tiger / Dark Warrior；五行写 Metal / Wood / Water / Fire / Earth；卦名写成 "Water over Thunder - Zhun"，八纯卦写成 "Water Doubled - Kan"。用神保留 yongshen 一词并在首次出现时用一句话说明它是本卦所取的关键六亲；应期写 yingqi (timing) 或直接写 timing，不要保留汉字。其他术语同理：需要保留原词时写罗马化拼音，不要在英文正文里夹汉字。
 文末必须原样附上这句英文，不得改写、不得再附中文版：This content is generated from a metaphysical tradition, for cultural interest and reflection only. It is not professional advice for any significant life decision.""",
 }
 
