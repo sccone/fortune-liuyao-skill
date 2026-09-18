@@ -535,6 +535,17 @@ def main() -> None:
     check(SYSTEM_PROMPT in english_prompt, "English packet dropped the method discipline")
     check("not professional advice" in english_prompt, "English packet lost the English disclaimer")
     check("Shi is on line 2" in english_prompt, "English packet does not fix the Shi/Ying wording the audit checks")
+    # Twice a live English reading came back English apart from a few Chinese
+    # characters -- first 应期, then the bare branches of a three-harmony triad --
+    # because the directive romanized the forms it happened to list and left the
+    # model nothing for the rest. Patching in one term per leak does not
+    # converge, so assert the tables are whole instead.
+    from lexicon import BRANCH, STEM
+
+    for character, roman in {**STEM, **BRANCH}.items():
+        check(f"{character}={roman}" in english_prompt,
+              f"the English directive has no romanization for {character}")
+    check("yingqi" in english_prompt, "the English directive does not romanize 应期")
 
     print(f"standalone fortune-liuyao regression: {PASSED}/{PASSED} passed")
 
